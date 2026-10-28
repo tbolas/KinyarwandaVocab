@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kinyarwanda Recorder</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px 16px; text-align: center; background: #fafafa; color: #222; }
+  .prompt { color: #666; margin: 24px 0 4px; }
+  .word { font-size: 2.4rem; font-weight: 700; margin: 0 0 24px; word-break: break-word; }
+  button { font-size: 1.1rem; padding: 14px 24px; margin: 6px; border: 0; border-radius: 10px; cursor: pointer; background: #2563eb; color: #fff; }
+  button.secondary { background: #e5e7eb; color: #222; }
+  button.rec { background: #dc2626; }
+  button:disabled { opacity: .4; cursor: default; }
+  audio { width: 100%; margin: 12px 0; }
+  .hidden { display: none; }
+  #status { color: #666; min-height: 1.5em; margin-top: 16px; }
+</style>
+</head>
+<body>
+
+<h1>Kinyarwanda Recorder</h1>
+
+<div id="main" class="hidden">
+  <p class="prompt" id="prompt"></p>
+  <p class="word" id="word"></p>
+  <button id="recBtn">Record</button>
+  <audio id="player" controls class="hidden"></audio>
+  <div>
+    <button id="redoBtn" class="secondary hidden">Redo</button>
+    <button id="nextBtn" class="hidden">Next</button>
+  </div>
+</div>
+
+<p id="status">Loading…</p>
+
+<script>
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxtIiazfKVb7bmG1w6ryQq7M8v2Ua4MRmkdqd7LKLQX9xJnK6gn24IcmkNf3lp_uL1N/exec';
+
+const $ = id => document.getElementById(id);
+let item = null;      // { row, word, english, remaining }
+let step = 0;         // 0 = Kinyarwanda, 1 = English
+let clips = [];       // [kinyarwandaDataURI, englishDataURI]
+let recorder = null;
+let stream = null;
+
+async function loadNext() {
+  show('main', false);
+  status('Loading…');
+  try {
+    const res = await (await fetch(SCRIPT_URL)).json();
+    if (res.error) return status('Error: ' + res.error);
+    if (res.done) return status('All words recorded!');
+    item = res; step = 0; clips = [];
+    renderStep();
+    show('main', true);
+    status(res.remaining + ' word' + (res.remaining === 1 ? '' : 's') + ' left');
+  } catch (e) {
+    status('Could not load: ' + e.message);
+  }
+}
+
+function renderStep() {
+  $('prompt').textContent = step === 0 ? 'Say this in Kinyarwanda:' : 'Now say it in English:';
+  $('word').textContent = step === 0 ? item.word : (item.english || item.word);
+  $('nextBtn').textContent = step === 0 ? 'Next' : 'Save';
+  $('recBtn').textContent = 'Record';
+  $('recBtn').className = '';
+  show('recBtn', true);
+  show('player', false);
+  show('redoBtn', false);
+  show('nextBtn', false);
+}
+
+$('recBtn').onclick = async () => {
+  if (recorder && recorder.state === 'recording') return recorder.stop();
+  try {
+    stream = stream || await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    return status('Microphone access denied');
+  }
+  const chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = e => chunks.push(e.data);
+  recorder.onstop = () => {
+    const blob = new Blob(chunks, { type: recorder.mimeType });
+    $('player').src = URL.createObjectURL(blob);
+    const reader = new FileReader();
+    reader.onloadend = () => { clips[step] = reader.result; };
+    reader.readAsDataURL(blob);
+    show('recBtn', false);
+    show('player', true);
+    show('redoBtn', true);
+    show('nextBtn', true);
+  };
+  recorder.start();
+  $('recBtn').textContent = 'Stop';
+  $('recBtn').className = 'rec';
+};
+
+$('redoBtn').onclick = renderStep;
+
+$('nextBtn').onclick = async () => {
+  if (step === 0) { step = 1; return renderStep(); }
+  $('nextBtn').disabled = true;
+  status('Saving…');
+  try {
+    const res = await (await fetch(SCRIPT_URL, {
+      method: 'POST',
+      body: JSON.stringify({ row: item.row, word: item.word, kinyarwanda: clips[0], english: clips[1] })
+    })).json();
+    if (res.error) throw new Error(res.error);
+    loadNext();
+  } catch (e) {
+    status('Save failed: ' + e.message);
+  } finally {
+    $('nextBtn').disabled = false;
+  }
+};
+
+function show(id, on) { $(id).classList.toggle('hidden', !on); }
+function status(msg) { $('status').textContent = msg; }
+
+loadNext();
+</script>
+</body>
+</html>
